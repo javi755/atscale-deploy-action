@@ -77,7 +77,7 @@ runs:
               --set privateIPAllocationMethod=Static \
               --private-ip-address $PRIVATE_IP
 
-          # 3. Calculate FQDN HERE (Where 'az' CLI exists)
+          # 3. Calculate FQDN
           FQDN=$(az vm show -d -g $RG -n $VM --query fqdns -o tsv)
           IP=$(az vm show -d -g $RG -n $VM --query publicIps -o tsv)
           
@@ -91,18 +91,30 @@ runs:
 
     - name: Configure Software
       uses: appleboy/ssh-action@master
+      env:
+        # MAP OUTPUTS TO ENVIRONMENT VARIABLES
+        PASSED_FQDN: ${{ steps.infra.outputs.fqdn }}
+        PASSED_IP: ${{ steps.infra.outputs.public_ip }}
       with:
         host: ${{ steps.infra.outputs.public_ip }}
         username: atscale
         key: ${{ inputs.ssh_private_key }}
         timeout: 20m
+        # PASS ENV VARS OVER SSH
+        envs: PASSED_FQDN,PASSED_IP
         script: |
-          # === THE FIX ===
-          # We Inject the FQDN from the GitHub Runner directly into the script string.
-          # The VM just sees the final value, it doesn't need to run 'az' commands.
-          FQDN="${{ steps.infra.outputs.fqdn }}"
+          # 0. Capture Variables
+          FQDN=$PASSED_FQDN
           
+          # SAFETY CHECK: If FQDN is empty, fall back to IP to prevent localhost error
+          if [ -z "$FQDN" ]; then
+             echo "WARNING: FQDN variable was empty. Falling back to Public IP."
+             FQDN=$PASSED_IP
+          fi
+          
+          echo "=========================================="
           echo "Configuring AtScale for: $FQDN"
+          echo "=========================================="
           
           # Standard Setup
           export PATH=$PATH:/snap/bin
@@ -129,7 +141,7 @@ runs:
           
           kubectl create secret tls atscale-tls-secret --cert=tls.crt --key=tls.key -n atscale --dry-run=client -o yaml | kubectl apply -f -
 
-          # Values File (Uses the injected FQDN variable)
+          # Values File (Uses the variable)
           cat <<EOF > values.yaml
           global:
             atscale:
