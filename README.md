@@ -10,6 +10,36 @@ This GitHub Action automatically provisions an Azure POC environment and deploys
 5. Configures HTTPS Ingress with self-signed certs.
 6. Prints the login credentials to the Action log.
 
+flowchart LR
+    %% Styles
+    classDef user fill:#f3f6fc,stroke:#747775,stroke-width:1px,color:#1e1e1e;
+    classDef internal fill:#e8f0fe,stroke:#747775,stroke-width:1px,color:#1e1e1e;
+    classDef note fill:#fff,stroke:none,font-style:italic,font-size:10pt;
+
+    subgraph User["User Experience (Declarative)"]
+        direction TB
+        UI[/"uses: atscale-inc/deploy-action
+        with:
+          client_id: 'acme'
+          region: 'eastus'"/]:::user
+    end
+
+    subgraph BlackBox["Internal Execution (Imperative)"]
+        direction TB
+        Step1[1. Input Parsing]:::internal
+        Step2[2. VM Provisioning]:::internal
+        Step3[3. Security Bootstrap]:::internal
+        Step4[4. Helm Deploy]:::internal
+        
+        Step1 --> Step2 --> Step3 --> Step4
+    end
+
+    UI -.->|Abstraction| BlackBox
+
+    %% Layout hints
+    linkStyle default stroke:#0b57d0,stroke-width:2px;
+
+
 ## Usage
 
 Create a file in your repository at `.github/workflows/deploy-atscale.yml`:
@@ -48,3 +78,4 @@ jobs:
           azure_subscription_id: ${{ secrets.AZURE_SUBSCRIPTION_ID }}
           ssh_public_key: ${{ secrets.SSH_PUBLIC_KEY }}
           ssh_private_key: ${{ secrets.SSH_PRIVATE_KEY }}
+
