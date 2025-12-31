@@ -64,22 +64,31 @@ runs:
 
           az vm open-port -g $RG -n $VM --port 22,80,443,16443,15432,11111 --priority 1010
 
-          # 2. Lock Static IP
+          # 2. Lock Static IP (With Safety Check Restored)
           PRIVATE_IP=$(az vm show -d -g $RG -n $VM --query privateIps -o tsv)
           NIC_ID=$(az vm show -g $RG -n $VM --query "networkProfile.networkInterfaces[0].id" -o tsv)
           NIC_NAME=$(basename $NIC_ID)
           IP_CONFIG_NAME=$(az network nic show --ids $NIC_ID --query "ipConfigurations[0].name" -o tsv)
           
-          az network nic ip-config update \
-              --resource-group $RG \
-              --nic-name $NIC_NAME \
-              --name $IP_CONFIG_NAME \
-              --set privateIPAllocationMethod=Static \
-              --private-ip-address $PRIVATE_IP
+          # Safety Check: Prevent crash if Azure API returns empty values
+          if [ -z "$PRIVATE_IP" ] || [ -z "$IP_CONFIG_NAME" ]; then
+             echo "Error: Could not detect IP or Config Name. Skipping Static Lock."
+          else
+             echo "Locking Private IP: $PRIVATE_IP"
+             az network nic ip-config update \
+                --resource-group $RG \
+                --nic-name $NIC_NAME \
+                --name $IP_CONFIG_NAME \
+                --set privateIPAllocationMethod=Static \
+                --private-ip-address $PRIVATE_IP
+          fi
 
-          # 3. Calculate FQDN
-          FQDN=$(az vm show -d -g $RG -n $VM --query fqdns -o tsv)
+          # 3. Calculate FQDN & IP
+          # FIX: Query Public IP resource directly. 'vm show' is unreliable/empty here.
+          FQDN=$(az network public-ip list -g $RG --query "[0].dnsSettings.fqdn" -o tsv)
           IP=$(az vm show -d -g $RG -n $VM --query publicIps -o tsv)
+          
+          echo "Detected FQDN: $FQDN"
           
           # 4. Save to Outputs
           echo "fqdn=$FQDN" >> $GITHUB_OUTPUT
@@ -87,7 +96,8 @@ runs:
 
     - name: Wait for Boot
       shell: bash
-      run: sleep 60
+      # Increased to 120s to allow NIC recovery after Static IP lock
+      run: sleep 120
 
     - name: Configure Software
       uses: appleboy/ssh-action@master
@@ -101,6 +111,7 @@ runs:
           echo "${{ steps.infra.outputs.fqdn }}" > hostname
           FQDN=$(cat hostname)
           if [ -z "$FQDN" ]; then
+             echo "WARNING: FQDN empty. Fallback to IP used."
              FQDN="${{ steps.infra.outputs.public_ip }}"
           fi
           
@@ -134,8 +145,7 @@ runs:
           kubectl create namespace atscale --dry-run=client -o yaml | kubectl apply -f -
           kubectl create secret tls atscale-tls-secret --cert=tls.crt --key=tls.key -n atscale --dry-run=client -o yaml | kubectl apply -f -
 
-          # 5. Deploy AtScale (FIXED: Use --set instead of values.yaml)
-          # We pass the FQDN directly here. No more YAML indentation bugs.
+          # 5. Deploy AtScale
           helm upgrade --install atscale oci://registry-1.docker.io/atscaleinc/atscale \
             --version 2025.10.0 \
             -n atscale \
@@ -178,14 +188,6 @@ runs:
           sudo microk8s kubectl apply -f ingress.yaml
 
           # 7. Credentials
-          echo "=============================================="
-          AS_USER=$(sudo microk8s kubectl get secret --namespace atscale atscale-kc-users -o jsonpath="{.data.atscaleAdmin}" | base64 -d)
-          AS_PASS=$(sudo microk8s kubectl get secret --namespace atscale atscale-kc-users -o jsonpath="{.data.atscaleAdminPassword}" | base64 -d)
-          echo "AtScale URL: https://$FQDN"
-          echo "Username: $AS_USER"
-          echo "Password: $AS_PASS"
-          echo "=============================================="
-
           echo "=============================================="
           AS_USER=$(sudo microk8s kubectl get secret --namespace atscale atscale-kc-users -o jsonpath="{.data.atscaleAdmin}" | base64 -d)
           AS_PASS=$(sudo microk8s kubectl get secret --namespace atscale atscale-kc-users -o jsonpath="{.data.atscaleAdminPassword}" | base64 -d)
