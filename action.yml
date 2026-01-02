@@ -1,5 +1,5 @@
 name: 'Deploy AtScale POC'
-description: 'Provisions an Azure VM, installs MicroK8s, and deploys AtScale using a dynamically generated values.yaml.'
+description: 'Provisions an Azure VM, installs MicroK8s, and deploys AtScale using a robust configuration strategy.'
 inputs:
   client_id: { description: 'Client Name', required: true }
   region: { description: 'Azure Region', required: false, default: 'eastus' }
@@ -62,7 +62,7 @@ runs:
           fi
 
           # 3. Calculate FQDN & IP
-          # CRITICAL FIX: Use 'public-ip list' because 'vm show' often returns empty FQDNs
+          # Use 'public-ip list' for reliable FQDN retrieval
           FQDN=$(az network public-ip list -g $RG --query "[0].dnsSettings.fqdn" -o tsv)
           IP=$(az vm show -d -g $RG -n $VM --query publicIps -o tsv)
           
@@ -114,28 +114,37 @@ runs:
           kubectl create namespace atscale --dry-run=client -o yaml | kubectl apply -f -
           kubectl create secret tls atscale-tls-secret --cert=tls.crt --key=tls.key -n atscale --dry-run=client -o yaml | kubectl apply -f -
 
-          # 4. Generate values.yaml (The robust "AtScale Way")
+          # 4. Generate values.yaml (Updated: Using printf for safety)
+          # We populate both global and specific scopes to ensure the chart picks it up.
           echo "Generating values.yaml..."
-          cat <<EOF > values.yaml
-          global:
-            ingressDomain: "$FQDN"
-            atscale:
-              externalHostname: "$FQDN"
-              tls:
-                existingSecret: "atscale-tls-secret"
-          EOF
+          printf "global:\n" > values.yaml
+          printf "  ingressDomain: \"%s\"\n" "$FQDN" >> values.yaml
+          printf "  atscale:\n" >> values.yaml
+          printf "    externalHostname: \"%s\"\n" "$FQDN" >> values.yaml
+          printf "    tls:\n" >> values.yaml
+          printf "      existingSecret: \"atscale-tls-secret\"\n" >> values.yaml
+          printf "atscale-proxy:\n" >> values.yaml
+          printf "  tls:\n" >> values.yaml
+          printf "    existingSecret: \"atscale-tls-secret\"\n" >> values.yaml
 
-          # 5. Deploy with Helm using values.yaml
+          # DEBUG: Print content to log to verify structure
+          echo "--- Content of values.yaml ---"
+          cat values.yaml
+          echo "------------------------------"
+
+          # 5. Deploy AtScale
+          # FIX: We use -f values.yaml BUT we also enforce global.ingressDomain via --set
+          # This acts as a 'Kill Switch' for the localhost bug.
           echo "Deploying AtScale..."
           helm upgrade --install atscale oci://registry-1.docker.io/atscaleinc/atscale \
             --version 2025.10.0 \
             -n atscale \
             --kubeconfig /home/atscale/.kube/config \
             -f values.yaml \
+            --set global.ingressDomain=$FQDN \
             --wait --timeout 15m
 
-          # 6. Configure Ingress (Solving the 503 Error)
-          # We dynamically find the service name to prevent mismatches
+          # 6. Configure Ingress (Dynamic Service Detection)
           echo "Detecting Service Name..."
           SVC_NAME=$(sudo microk8s kubectl get svc -n atscale -o jsonpath='{.items[?(@.spec.ports[*].port==443)].metadata.name}' | head -n1)
           if [ -z "$SVC_NAME" ]; then SVC_NAME="atscale"; fi
