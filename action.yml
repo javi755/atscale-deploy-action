@@ -36,7 +36,7 @@ runs:
             --image Ubuntu2404 \
             --admin-username atscale \
             --ssh-key-values "${{ inputs.ssh_public_key }}" \
-            --size Standard_D2_v2  \
+            --size Standard_D2s_v3 \
             --public-ip-sku Standard \
             --public-ip-address-dns-name $DNS \
             --tags Lifecycle=POC Schedule=BusinessHours \
